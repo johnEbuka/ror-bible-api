@@ -2,7 +2,8 @@ const fs = require("fs");
 const path = require("path");
 
 // Load JSON once when the function is first loaded
-const biblePath = path.join(process.cwd(), "englishBiblePremium.json");
+// const biblePath = path.join(process.cwd(), "englishBiblePremium.json");
+const biblePath = path.join(process.cwd(), "NewKJVPremium.json");
 const bibleRaw = fs.readFileSync(biblePath, "utf8");
 const bibleData = JSON.parse(bibleRaw);
 
