@@ -71,25 +71,57 @@ function parseVerseParam(v) {
   return null;
 }
 
+function collectNameArrays(obj) {
+  const found = [];
+  const stack = [obj];
+
+  while (stack.length) {
+    const cur = stack.pop();
+    if (!cur || typeof cur !== "object") continue;
+
+    // If this object has a `name` key that is array-like, collect it
+    if (cur.name) {
+      if (Array.isArray(cur.name)) found.push(cur.name);
+      else if (typeof cur.name === "object") found.push([cur.name]);
+    }
+
+    // Walk children
+    for (const k of Object.keys(cur)) {
+      const v = cur[k];
+      if (v && typeof v === "object") stack.push(v);
+    }
+  }
+
+  return found;
+}
+
 function findBookNode(bibleJson, bookRaw) {
   const target = normalizeBook(bookRaw);
 
-  const names =
-    bibleJson?.book?.will?.name ||
-    bibleJson?.book?.name ||
-    bibleJson?.name ||
-    [];
+  // collect all candidate name arrays anywhere in the json
+  const candidates = collectNameArrays(bibleJson);
 
-  const arr = Array.isArray(names) ? names : [names];
+  for (const arr of candidates) {
+    for (const node of arr) {
+      const id = normalizeBook(node?._attributes?.id);
+      const txt = normalizeBook(node?._text);
 
-  for (const node of arr) {
-    const id = normalizeBook(node?._attributes?.id);
-    const txt = normalizeBook(node?._text);
-    if (id === target || txt === target || id.includes(target) || txt.includes(target)) {
-      return node;
+      if (
+        id === target ||
+        txt === target ||
+        id.includes(target) ||
+        txt.includes(target) ||
+        target.includes(id) ||
+        target.includes(txt)
+      ) {
+        return node;
+      }
     }
   }
+
   return null;
+}
+
 }
 
 function findChapterNode(bookNode, chapterNum) {
