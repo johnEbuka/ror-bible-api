@@ -24,6 +24,7 @@ const OT_URL = process.env.OT_URL;
 let NT_CACHE = null;
 let OT_CACHE = null;
 
+// Detect NT books; everything else falls back to OT
 const NT_BOOKS = new Set([
   "matthew","mark","luke","john","acts","romans",
   "1 corinthians","2 corinthians","galatians","ephesians","philippians","colossians",
@@ -35,6 +36,7 @@ function normalizeBook(s) {
   return String(s || "")
     .toLowerCase()
     .replace(/\./g, "")
+    // IMPORTANT: remove ALL whitespace characters (including \n, \r, \t)
     .replace(/\s+/g, " ")
     .trim()
     .replace(/^first /, "1 ")
@@ -51,6 +53,7 @@ function parseVerseParam(v) {
   const raw = String(v).trim().toLowerCase();
   if (!raw) return null;
 
+  // normalize "1 to 16" -> "1-16"
   const s = raw.replace(/\s+to\s+/g, "-").replace(/\s+/g, "");
 
   if (/^\d+$/.test(s)) {
@@ -71,57 +74,23 @@ function parseVerseParam(v) {
   return null;
 }
 
-function collectNameArrays(obj) {
-  const found = [];
-  const stack = [obj];
-
-  while (stack.length) {
-    const cur = stack.pop();
-    if (!cur || typeof cur !== "object") continue;
-
-    // If this object has a `name` key that is array-like, collect it
-    if (cur.name) {
-      if (Array.isArray(cur.name)) found.push(cur.name);
-      else if (typeof cur.name === "object") found.push([cur.name]);
-    }
-
-    // Walk children
-    for (const k of Object.keys(cur)) {
-      const v = cur[k];
-      if (v && typeof v === "object") stack.push(v);
-    }
-  }
-
-  return found;
-}
-
 function findBookNode(bibleJson, bookRaw) {
   const target = normalizeBook(bookRaw);
 
-  // collect all candidate name arrays anywhere in the json
-  const candidates = collectNameArrays(bibleJson);
+  const names = bibleJson?.book?.will?.name || [];
+  const arr = Array.isArray(names) ? names : [names];
 
-  for (const arr of candidates) {
-    for (const node of arr) {
-      const id = normalizeBook(node?._attributes?.id);
-      const txt = normalizeBook(node?._text);
+  for (const node of arr) {
+    const id = normalizeBook(node?._attributes?.id);      // best match
+    const txt = normalizeBook(node?._text);              // fallback match
 
-      if (
-        id === target ||
-        txt === target ||
-        id.includes(target) ||
-        txt.includes(target) ||
-        target.includes(id) ||
-        target.includes(txt)
-      ) {
-        return node;
-      }
-    }
+    if (id === target || txt === target) return node;
+
+    // more forgiving (handles “exodus ” vs “exodus” etc.)
+    if (id.includes(target) || target.includes(id)) return node;
+    if (txt.includes(target) || target.includes(txt)) return node;
   }
-
   return null;
-}
-
 }
 
 function findChapterNode(bookNode, chapterNum) {
@@ -169,6 +138,7 @@ module.exports = async (req, res) => {
       return res.status(500).json({ error: "Missing NT_URL or OT_URL in env vars" });
     }
 
+    // cache loads
     if (!NT_CACHE) NT_CACHE = await fetchJson(NT_URL);
     if (!OT_CACHE) OT_CACHE = await fetchJson(OT_URL);
 
@@ -189,13 +159,16 @@ module.exports = async (req, res) => {
     if (range) {
       const start = Math.max(1, range.start);
       const end = range.end === "end" ? all[all.length - 1].verse : range.end;
+
       selected = all.filter(v => v.verse >= start && v.verse <= end);
-      if (!selected.length) return res.status(404).json({ error: `Verse(s) not found: ${book} ${chapter} ${verseParam}` });
+      if (!selected.length) {
+        return res.status(404).json({ error: `Verse(s) not found: ${book} ${chapter} ${verseParam}` });
+      }
     } else if (verseParam) {
       return res.status(400).json({ error: `Invalid verse format: ${verseParam}` });
     }
 
-    // speech string for Voiceflow
+    // Build speech for Voiceflow (no JS needed)
     const firstV = selected[0].verse;
     const lastV = selected[selected.length - 1].verse;
 
@@ -204,7 +177,6 @@ module.exports = async (req, res) => {
 
     const versesText = clipped.map(v => v.text).join(" ");
     const rangeLabel = firstV === lastV ? `verse ${firstV}` : `verses ${firstV} to ${lastV}`;
-
     const speech = `${book} chapter ${chapter} ${rangeLabel}. ${versesText}`;
 
     return res.json({ book, chapter, verses: selected, speech });
