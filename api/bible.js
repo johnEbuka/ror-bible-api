@@ -117,24 +117,45 @@ function extractVerses(chapterNode) {
   const arr = Array.isArray(raw) ? raw : [raw];
 
   const out = [];
+
   for (const v of arr) {
     const idRaw = String(v?._attributes?.id ?? "").trim();
     if (!idRaw || !/^\d+$/.test(idRaw)) continue;
 
     const verseNum = parseInt(idRaw, 10);
-    const t = v?._text;
 
-    const text = Array.isArray(t)
-      ? t.join(" ").replace(/\s+/g, " ").trim()
-      : (typeof t === "string" ? t.replace(/\s+/g, " ").trim() : "");
+    // ✅ Text can be in v._text OR v.woc._text (as seen in your OT/NT structure)
+    let t = v?._text;
+
+    // If v._text is missing, check woc._text
+    if (!t && v?.woc?._text) t = v.woc._text;
+
+    // Also sometimes text appears under nested nodes like v.woc._text as array
+    let text = "";
+
+    if (Array.isArray(t)) {
+      text = t.join(" ").replace(/\s+/g, " ").trim();
+    } else if (typeof t === "string") {
+      text = t.replace(/\s+/g, " ").trim();
+    } else {
+      text = "";
+    }
+
+    // ✅ Clean spacing before punctuation: "world ," -> "world,"
+    if (text) {
+      text = text
+        .replace(/\s+([,.;:!?])/g, "$1")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
 
     if (text) out.push({ verse: verseNum, text });
   }
 
-  // ensure ordered
   out.sort((a, b) => a.verse - b.verse);
   return out;
 }
+
 
 module.exports = async (req, res) => {
   try {
