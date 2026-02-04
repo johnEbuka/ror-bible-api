@@ -1,3 +1,4 @@
+// api/bible.js
 const https = require("https");
 
 function fetchJson(url) {
@@ -36,7 +37,6 @@ function normalizeBook(s) {
   return String(s || "")
     .toLowerCase()
     .replace(/\./g, "")
-    // IMPORTANT: remove ALL whitespace characters (including \n, \r, \t)
     .replace(/\s+/g, " ")
     .trim()
     .replace(/^first /, "1 ")
@@ -48,12 +48,19 @@ function isNT(bookRaw) {
   return NT_BOOKS.has(normalizeBook(bookRaw));
 }
 
+// ✅ parse "16", "1-16", "1 to 16", "1-end", "1-", and strip trailing punctuation like "1-end."
 function parseVerseParam(v) {
   if (v == null) return null;
-  const raw = String(v).trim().toLowerCase();
+
+  // Strip trailing punctuation from Voiceflow ("1-end." / "16," / etc.)
+  const raw = String(v)
+    .trim()
+    .toLowerCase()
+    .replace(/[.,!?;:]+$/g, "");
+
   if (!raw) return null;
 
-  // normalize "1 to 16" -> "1-16"
+  // normalize "1 to 16" -> "1-16" and remove spaces
   const s = raw.replace(/\s+to\s+/g, "-").replace(/\s+/g, "");
 
   if (/^\d+$/.test(s)) {
@@ -81,14 +88,14 @@ function findBookNode(bibleJson, bookRaw) {
   const arr = Array.isArray(names) ? names : [names];
 
   for (const node of arr) {
-    const id = normalizeBook(node?._attributes?.id);      // best match
-    const txt = normalizeBook(node?._text);              // fallback match
+    const id = normalizeBook(node?._attributes?.id);
+    const txt = normalizeBook(node?._text);
 
     if (id === target || txt === target) return node;
 
-    // more forgiving (handles “exodus ” vs “exodus” etc.)
-    if (id.includes(target) || target.includes(id)) return node;
-    if (txt.includes(target) || target.includes(txt)) return node;
+    // forgiving match (handles slight variations)
+    if (id && (id.includes(target) || target.includes(id))) return node;
+    if (txt && (txt.includes(target) || target.includes(txt))) return node;
   }
   return null;
 }
@@ -98,22 +105,23 @@ function findChapterNode(bookNode, chapterNum) {
   const arr = Array.isArray(chapters) ? chapters : [chapters];
 
   for (const c of arr) {
-    const id = parseInt(c?._attributes?.id, 10);
+    const id = parseInt(String(c?._attributes?.id ?? "").trim(), 10);
     if (id === chapterNum) return c;
   }
   return arr[chapterNum - 1] || null;
 }
 
+// ✅ Fix missing verses: trim verse id before /^\d+$/
 function extractVerses(chapterNode) {
   const raw = chapterNode?.verse || [];
   const arr = Array.isArray(raw) ? raw : [raw];
 
   const out = [];
   for (const v of arr) {
-    const id = v?._attributes?.id;
-    if (!id || !/^\d+$/.test(String(id))) continue;
+    const idRaw = String(v?._attributes?.id ?? "").trim();
+    if (!idRaw || !/^\d+$/.test(idRaw)) continue;
 
-    const verseNum = parseInt(id, 10);
+    const verseNum = parseInt(idRaw, 10);
     const t = v?._text;
 
     const text = Array.isArray(t)
@@ -122,6 +130,9 @@ function extractVerses(chapterNode) {
 
     if (text) out.push({ verse: verseNum, text });
   }
+
+  // ensure ordered
+  out.sort((a, b) => a.verse - b.verse);
   return out;
 }
 
@@ -134,6 +145,7 @@ module.exports = async (req, res) => {
     if (!book || !chapter) {
       return res.status(400).json({ error: "book and chapter are required" });
     }
+
     if (!NT_URL || !OT_URL) {
       return res.status(500).json({ error: "Missing NT_URL or OT_URL in env vars" });
     }
@@ -161,6 +173,7 @@ module.exports = async (req, res) => {
       const end = range.end === "end" ? all[all.length - 1].verse : range.end;
 
       selected = all.filter(v => v.verse >= start && v.verse <= end);
+
       if (!selected.length) {
         return res.status(404).json({ error: `Verse(s) not found: ${book} ${chapter} ${verseParam}` });
       }
@@ -168,7 +181,7 @@ module.exports = async (req, res) => {
       return res.status(400).json({ error: `Invalid verse format: ${verseParam}` });
     }
 
-    // Build speech for Voiceflow (no JS needed)
+    // Build speech for Voiceflow
     const firstV = selected[0].verse;
     const lastV = selected[selected.length - 1].verse;
 
@@ -177,7 +190,14 @@ module.exports = async (req, res) => {
 
     const versesText = clipped.map(v => v.text).join(" ");
     const rangeLabel = firstV === lastV ? `verse ${firstV}` : `verses ${firstV} to ${lastV}`;
-    const speech = `${book} chapter ${chapter} ${rangeLabel}. ${versesText}`;
+
+    // Add a hint if we clipped the spoken verses
+    const clippedNote =
+      selected.length > MAX_VERSES_SPOKEN
+        ? ` I can continue if you say, continue reading.`
+        : "";
+
+    const speech = `${book} chapter ${chapter} ${rangeLabel}. ${versesText}${clippedNote}`.trim();
 
     return res.json({ book, chapter, verses: selected, speech });
   } catch (e) {
